@@ -328,7 +328,7 @@ class BentoSearch::WorldcatSruDcEngine
   def self.default_configuration
     {
       :base_url => "http://www.worldcat.org/webservices/catalog/search/sru?",
-      :linking_base_url => "http://worldcat.org/oclc/",
+      :linking_base_url => "http://uiuclib.worldcat.org/oclc/",
       :auth => false
     }
   end
