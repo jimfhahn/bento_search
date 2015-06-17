@@ -5,7 +5,7 @@
 
 bento_search provides an abstraction/normalization layer for querying and
 displaying results from external search engines, in Ruby on Rails. Works with
-Rails 3.x or 4.x.  Currently tested only under ruby 1.9.3. (todo, change this soon)
+Rails 3.x or 4.x.   ruby 1.9.3+
 
 ### Goals: To help you
 
@@ -87,7 +87,7 @@ may be required for certain engines.
 ~~~~
 
 `results` are a [BentoSearch::Results](./app/models/bento_search/results.rb) object, which acts like an array of
-[BentoSearch::Item](./app/models/bento_search/results.rb) objects, along with some meta-information about the
+[BentoSearch::ResultItem](./app/models/bento_search/result_item.rb) objects, along with some meta-information about the
 search itself (pagination keys, etc).  BentoSearch::Results and Item fields
 are standardized accross engines. BentoSearch::Items provide semantic
 values (title, author, etc.), as available from the particular engine.
