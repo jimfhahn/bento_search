@@ -214,4 +214,4 @@ class BentoSearch::GoogleSiteSearchEngine
       html_safe
   end
 
-end
+end end
