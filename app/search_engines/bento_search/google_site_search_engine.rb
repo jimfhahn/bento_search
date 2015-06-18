@@ -1,6 +1,6 @@
 require 'cgi'
 require 'multi_json'
-
+require 'uri'
 require 'http_client_patch/include_client'
 require 'httpclient'
 
