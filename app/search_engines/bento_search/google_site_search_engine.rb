@@ -57,6 +57,38 @@ class BentoSearch::GoogleSiteSearchEngine
   end
 
 
+  include ActionView::Helpers::OutputSafetyHelper # for safe_join
+
+  # Originally we used $$BENTO_HL_START$$ etc with dollar
+  # signs, but the dollar signs trigger a weird bug in summon
+  # where end tokens are missing from output.
+  @@hl_start_token = "__BENTO_HL_START__"
+  @@hl_end_token = "__BENTO_HL_END__"
+
+  def search_implementation(args)
+    uri, headers = construct_request(args)
+
+    Rails.logger.debug("GoogleSiteSearchEngine request URL: #{uri}")
+
+    results = BentoSearch::Results.new
+
+    hash, response, exception = nil
+    begin
+      response = http_client.get(uri, nil, headers)
+      hash = MultiJson.load( response.body )
+    rescue TimeoutError, HTTPClient::ConfigurationError, HTTPClient::BadResponseError, MultiJson::DecodeError, Nokogiri::SyntaxError => e
+      exception = e
+    end
+    # handle some errors
+    if (response.nil? || hash.nil? || exception ||
+        (! HTTP::Status.successful? response.status))
+      results.error ||= {}
+      results.error[:exception] = e
+      results.error[:status] = response.status if response
+
+      return results
+    end
+#end add summon search engine
 
   def search_implementation(args)
     results = BentoSearch::Results.new
