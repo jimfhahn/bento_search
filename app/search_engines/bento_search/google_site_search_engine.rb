@@ -49,6 +49,15 @@ class BentoSearch::GoogleSiteSearchEngine
   extend HTTPClientPatch::IncludeClient
   include_http_client
 
+  #new from summon timeout
+  HttpTimeout = 4.5
+  extend HTTPClientPatch::IncludeClient
+  include_http_client do |client|
+    client.connect_timeout = client.send_timeout = client.receive_timeout = HttpTimeout
+  end
+
+
+
   def search_implementation(args)
     results = BentoSearch::Results.new
 
