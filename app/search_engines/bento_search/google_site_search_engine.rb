@@ -46,9 +46,6 @@ require 'httpclient'
 class BentoSearch::GoogleSiteSearchEngine
   include BentoSearch::SearchEngine
 
-  extend HTTPClientPatch::IncludeClient
-  include_http_client
-
   #new from summon timeout
   HttpTimeout = 6.5
   extend HTTPClientPatch::IncludeClient
