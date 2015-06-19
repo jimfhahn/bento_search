@@ -1,6 +1,6 @@
 require 'cgi'
 require 'multi_json'
-require 'uri'
+
 require 'http_client_patch/include_client'
 require 'httpclient'
 
@@ -44,174 +44,136 @@ require 'httpclient'
 #                  have HTML <b> tags in them, and be html_safe. If false, plain
 #                  ascii, but you'll still get snippets.
 class BentoSearch::GoogleSiteSearchEngine
-  include BentoSearch::SearchEngine
-
-  #new from summon timeout
-  HttpTimeout = 6.5
-  extend HTTPClientPatch::IncludeClient
-  include_http_client do |client|
-    client.connect_timeout = client.send_timeout = client.receive_timeout = HttpTimeout
-  end
-
-
-  include ActionView::Helpers::OutputSafetyHelper # for safe_join
-
-  # Originally we used $$BENTO_HL_START$$ etc with dollar
-  # signs, but the dollar signs trigger a weird bug in summon
-  # where end tokens are missing from output.
-  @@hl_start_token = "__BENTO_HL_START__"
-  @@hl_end_token = "__BENTO_HL_END__"
-
-  def search_implementation(args)
-    uri, headers = construct_request(args)
-
-    Rails.logger.debug("GoogleSiteSearchEngine request URL: #{uri}")
-
-    results = BentoSearch::Results.new
-
-    hash, response, exception = nil
-    begin
-      response = http_client.get(uri, nil, headers)
-      hash = MultiJson.load( response.body )
-    rescue TimeoutError, HTTPClient::ConfigurationError, HTTPClient::BadResponseError, MultiJson::DecodeError, Nokogiri::SyntaxError => e
-      exception = e
+    include BentoSearch::SearchEngine
+    
+    extend HTTPClientPatch::IncludeClient
+    include_http_client
+    
+    def search_implementation(args)
+        results = BentoSearch::Results.new
+        
+        url = construct_query(args)
+        
+        response = http_client.get(url)
+        
+        if response.status != 200
+            results.error ||= {}
+            results.error[:status] = response.status
+            results.error[:response] = response.body
+            return results
+        end
+        
+        json = MultiJson.load(response.body)
+        
+        results.total_items =  json["searchInformation"]["totalResults"].to_i
+        
+        (json["items"] || []).each do |json_item|
+            item = BentoSearch::ResultItem.new
+            
+            if configuration.highlighting
+                item.title          = highlight_normalize json_item["htmlTitle"]
+                item.abstract       = highlight_normalize json_item["htmlSnippet"]
+                item.source_title  = highlight_normalize json_item["htmlFormattedUrl"]
+                else
+                item.title          = json_item["title"]
+                item.abstract       = json_item["snippet"]
+                item.source_title   = json_item["formattedUrl"]
+            end
+            
+            item.format_str       = json_item["fileFormat"]
+            
+            item.link             = json_item["link"]
+            
+            # we won't bother generating openurls for google hits, not useful
+            item.openurl_disabled = true
+            
+            results << item
+        end
+        
+        return results
     end
-    # handle some errors
-    if (response.nil? || hash.nil? || exception ||
-        (! HTTP::Status.successful? response.status))
-      results.error ||= {}
-      results.error[:exception] = e
-      results.error[:status] = response.status if response
-
-      return results
+    
+    # yep, google gives us a 10 max per page.
+    # also only lets us look at first 10 pages, sorry.
+    def max_per_page
+        10
     end
-#end add summon search engine
-
-  def search_implementation(args)
-    results = BentoSearch::Results.new
-
-    url = construct_query(args)
-
-    response = http_client.get(url)
-
-    if response.status != 200
-      results.error ||= {}
-      results.error[:status] = response.status
-      results.error[:response] = response.body
-      return results
-    end
-
-    json = MultiJson.load(response.body)
-
-    results.total_items =  json["searchInformation"]["totalResults"].to_i
-
-    (json["items"] || []).each do |json_item|
-      item = BentoSearch::ResultItem.new
-
-      if configuration.highlighting
-        item.title          = highlight_normalize json_item["htmlTitle"]
-        item.abstract       = highlight_normalize json_item["htmlSnippet"]
-        item.source_title  = highlight_normalize json_item["htmlFormattedUrl"]
-      else
-        item.title          = json_item["title"]
-        item.abstract       = json_item["snippet"]
-        item.source_title   = json_item["formattedUrl"]
-      end
-
-      item.format_str       = json_item["fileFormat"]
-
-      item.link             = json_item["link"]
-
-      # we won't bother generating openurls for google hits, not useful
-      item.openurl_disabled = true
-
-      results << item
-    end
-
-    return results
-  end
-
-  # yep, google gives us a 10 max per page.
-  # also only lets us look at first 10 pages, sorry.
-  def max_per_page
-    10
-  end
-
-  def self.required_configuration
+    
+    def self.required_configuration
     [:api_key, :cx]
-  end
+end
 
-  def self.default_configuration
+def self.default_configuration
+{
+    :base_url => 'https://www.googleapis.com/customsearch/v1?',
+    :highlighting => true
+}
+end
+
+# Google supports relevance, and date sorting. Other kinds of
+# sorts not generally present. Can be with custom structured data,
+# but we don't support that. We currently do date sorts as hard sorts,
+# but could be changed to be biases instead. See:
+# https://developers.google.com/custom-search/docs/structured_data#page_dates
+def sort_definitions
     {
-      :base_url => 'https://www.googleapis.com/customsearch/v1?',
-      :highlighting => true
+        "relevance" => {},
+        "date_desc" => {:implementation => "date"},
+        "date_asc"  => {:implementation => "date:a"}
     }
-  end
+end
 
-  # Google supports relevance, and date sorting. Other kinds of
-  # sorts not generally present. Can be with custom structured data,
-  # but we don't support that. We currently do date sorts as hard sorts,
-  # but could be changed to be biases instead. See:
-  # https://developers.google.com/custom-search/docs/structured_data#page_dates
-  def sort_definitions
-    {
-      "relevance" => {},
-      "date_desc" => {:implementation => "date"},
-      "date_asc"  => {:implementation => "date:a"}
-    }
-  end
+protected
 
-  protected
-
-  # create the URL to the google API based on normalized search args
-  #
-  # If you ask for pagination beyond what google will provide, it
-  # will give you the last page google will allow AND mutate the
-  # args hash passed in to match what you actually got!
-  def construct_query(args)
+# create the URL to the google API based on normalized search args
+#
+# If you ask for pagination beyond what google will provide, it
+# will give you the last page google will allow AND mutate the
+# args hash passed in to match what you actually got!
+def construct_query(args)
     url = "#{configuration.base_url}key=#{CGI.escape configuration.api_key}&cx=#{CGI.escape configuration.cx}"
     url += "&q=#{CGI.escape args[:query]}"
-
-
+    
+    
     url += "&num=#{args[:per_page]}" if args[:per_page]
-
+    
     # google 'start' is 1-based. Google won't let you paginate
     # past ~10 pages (101 - num). We silently max out there without
     # raising.
     if start = args[:start]
-      num   = args[:per_page] || 10
-      start = start + 1
-
-      if start > (101 - num)
-        # illegal! fix.
-        start         = (101 - num)
-        args[:start]  = (start - 1) # ours is zero based
-        args[:page]   = (args[:start] / num) + 1
-      end
-
-
-      url += "&start=#{start}"
+        num   = args[:per_page] || 10
+        start = start + 1
+        
+        if start > (101 - num)
+            # illegal! fix.
+            start         = (101 - num)
+            args[:start]  = (start - 1) # ours is zero based
+            args[:page]   = (args[:start] / num) + 1
+        end
+        
+        
+        url += "&start=#{start}"
     end
-
+    
     if (sort = args[:sort])  &&  (value = sort_definitions[sort].try {|h| h[:implementation]})
-      url += "&sort=#{CGI.escape value}"
+        url += "&sort=#{CGI.escape value}"
     end
-
+    
     return url
-  end
+end
 
-  # normalization for strings returned by google as 'html' with query
-  # in context highlighting.
-  #
-  # * change straight <b></b> tags given by google for highlighting
-  # to <b class="bento_search_highight">.
-  # * remove <br> tags that google annoyingly puts in; we'll handle
-  #   line wrapping ourselves thanks.
-  # * and mark html_safe
-  def highlight_normalize(str)
+# normalization for strings returned by google as 'html' with query
+# in context highlighting.
+#
+# * change straight <b></b> tags given by google for highlighting
+# to <b class="bento_search_highight">.
+# * remove <br> tags that google annoyingly puts in; we'll handle
+#   line wrapping ourselves thanks.
+# * and mark html_safe
+def highlight_normalize(str)
     str.gsub("<b>", '<b class="bento_search_highlight">').
-      gsub("<br>", "").
-      html_safe
-  end
+    gsub("<br>", "").
+    html_safe
+end
 
-end end
+end
