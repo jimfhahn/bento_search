@@ -1,5 +1,9 @@
 require 'confstruct'
 
+module BentoSearch
+  class Error < ::StandardError ; end
+end 
+
 require "bento_search/engine"
 require 'bento_search/routes'
 
@@ -20,8 +24,7 @@ if Hashie::Mash.instance_methods(false).include?(:id)
 end
 
 
-module BentoSearch  
-  
+module BentoSearch      
   def self.global_registrar
     @@global_registrar ||= BentoSearch::Registrar.new
   end

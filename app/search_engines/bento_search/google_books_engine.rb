@@ -89,10 +89,20 @@ module BentoSearch
       # Have to use different API endpoint, can't do a fielded search.
       url = base_url + "volumes/#{CGI.escape id}"
 
+      if configuration.api_key
+        url += "?key=#{configuration.api_key}"
+      end
+
       response = http_client.get( url )
 
       if response.status == 404
         raise BentoSearch::NotFound.new("ID: #{id}")
+      end
+
+      # GBS has switched to returning a 503 for bad id's???
+      # Prob a bug on Google's end, but we have to deal with it.
+      if response.status == 503
+        raise BentoSearch::NotFound.new("ID: #{id} (503 error from Google, tests show indicates not found ID however)")
       end
 
       json = MultiJson.load( response.body )
@@ -195,6 +205,10 @@ module BentoSearch
       }
     end
 
+    def multi_field_search?
+      true
+    end
+
     protected
 
 
@@ -207,7 +221,10 @@ module BentoSearch
     # turns it into a URL for Google API. Factored out to make testing
     # possible.
     def args_to_search_url(arguments)
-      query = if arguments[:search_field]
+      query = if arguments[:query].kind_of? Hash
+        #multi-field
+        arguments[:query].collect {|field, query| fielded_query(query, field)}.join(" ")
+      elsif arguments[:search_field]
         fielded_query(arguments[:query], arguments[:search_field])
       else
         arguments[:query]

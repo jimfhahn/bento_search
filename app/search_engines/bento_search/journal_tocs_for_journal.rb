@@ -50,8 +50,13 @@ module BentoSearch
           url = request_url(issn)
           response = http_client.get(url)
 
+          # In some cases, status 401 seems to be bad email
           unless response.ok?
-            raise FetchError.new("#{url}: returns #{response.status} response")
+            # trim some XML boilerplate and remove newlines
+            # from response body, for better error message
+            response_body = response.body.gsub(/[\n\t]/, '').sub(/\A<\?xml[^>]*\>/, '')
+
+            raise FetchError.new("#{url}: returns #{response.status} response: #{response_body}")
           end
 
           Nokogiri::XML(response.body)
@@ -76,7 +81,7 @@ module BentoSearch
       xml = fetch_xml(issn)
 
 
-      BentoSearch::Results.new.concat(
+      results = BentoSearch::Results.new.concat(
         xml.xpath("./rdf:RDF/rss:item", xml_ns).collect do |node|
           item = BentoSearch::ResultItem.new
 
@@ -128,17 +133,30 @@ module BentoSearch
           date_node = xml_text(node, "prism:coverDate") || xml_text(node, "dc:date") || xml_text(node, "prism:publicationDate")
           if date_node && date_node =~ /\A(\d\d\d\d-\d\d-\d\d)/
             item.publication_date = Date.strptime( $1, "%Y-%m-%d")
+          elsif date_node
+            # Let's try a random parse, they give us all kinds of things I'm afraid
+            item.publication_date = Date.parse(date_node) rescue ArgumentError
           end
 
           # abstract, we need to strip possible HTML tags (sometimes they're
-          # there, sometimes not).
-          item.abstract   = xml_text(node, "rss:description").try do |text|
-            strip_tags(text)
+          # there, sometimes not), and also decode HTML entities. 
+          item.abstract   = xml_text(node, "rss:description").try do |text|            
+            HTMLEntities.new.decode(strip_tags(text))
           end
 
           item
         end
       )
+
+      # Items seem to come back in arbitrary order, we want to sort
+      # by date reverse if we can
+      if results.all? {|i| i.publication_date.present? }
+        results.sort_by! {|i| i.publication_date}.reverse!
+      end
+
+      fill_in_search_metadata_for(results)
+
+      return results
     end
 
     # just a convenience method
@@ -172,7 +190,7 @@ module BentoSearch
       ["registered_email"]
     end
 
-    class FetchError < ::StandardError ; end
+    class FetchError < BentoSearch::FetchError ; end
 
 
   end

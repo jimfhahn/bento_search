@@ -27,11 +27,14 @@ module BentoSearch
   # apparently by emailing directly to dave.santucci at elsevier dot com.  
   #    
   # Scopus API Docs:   
-  # * http://www.developers.elsevier.com/devcms/content-api-search-request
-  # * http://www.developers.elsevier.com/devcms/content/search-fields-overview
+  # * http://api.elsevier.com/documentation/SCOPUSSearchAPI.wadl
+  # * http://api.elsevier.com/documentation/search/SCOPUSSearchViews.htm
+  #
+  # Query syntax and search fields:
+  # * http://api.elsevier.com/documentation/search/SCOPUSSearchTips.htm
   #
   # Some more docs on response elements and query elements:
-  # * http://api.elsevier.com/content/search/#d0n14606
+  # * http://api.elsevier.com/content/search/#d0n14606  
   # 
   # Other API's in the suite not being used by this code at present: 
   # * http://www.developers.elsevier.com/devcms/content-api-retrieval-request
@@ -69,12 +72,12 @@ module BentoSearch
       rescue TimeoutError, HTTPClient::ConfigurationError, HTTPClient::BadResponseError, Nokogiri::SyntaxError  => e
         exception = e        
       end
-      
-      
+
       # handle errors
       if (response.nil? || xml.nil? || exception || 
           (! HTTP::Status.successful? response.status) ||
-          xml.at_xpath("service-error")
+          xml.at_xpath("service-error") ||
+          xml.at_xpath("./atom:feed/atom:entry/atom:error", xml_ns)
           )
       
         # UGH. Scopus reports 0 hits as an error, not entirely distinguishable
@@ -89,14 +92,22 @@ module BentoSearch
           # PROBABLY 0 hit count, although could be something else I'm afraid. 
           results.total_items = 0
           return results
+        elsif (
+            (response.status == 200) &&
+            xml &&
+            (error_xml = xml.at_xpath("./atom:feed/atom:entry/atom:error", xml_ns)) &&
+            (error_xml.text == "Result set was empty")
+          )
+          # NEW way of Scopus reporting an error that makes no sense either
+          results.total_items = 0
+          return results
         else
           # real error              
           results.error ||= {}
           results.error[:exception] = e
           results.error[:status] = response.status if response
-          # keep from storing the entire possibly huge response as error
-          # but sometimes it's an error message. 
-          results.error[:error_info] = xml.at_xpath("service_error") if xml
+          results.error[:error_info] = xml.at_xpath("service-error").text.gsub!(/[\n\t ]+/, " ") if xml
+          results.error[:error_info] ||= xml.at_xpath("./atom:feed/atom:entry/atom:error", xml_ns).text if xml
           return results
         end
       end                  
@@ -196,7 +207,14 @@ module BentoSearch
         # controlled and author-assigned keywords
         "KEY"         => {:semantic => :subject},
         "ISBN"        => {:semantic => :isbn},
-        "ISSN"        => {:semantic => :issn},              
+        "ISSN"        => {:semantic => :issn},
+        "VOLUME"      => {:semantic => :volume},
+        "ISSUE"       => {:semantic => :issue},
+        "PAGEFIRST"   => {:semantic => :start_page},
+        # Should we use SRCTITLE instead? I think exact match might be better?
+        "EXACTSRCTITLE" => {:semantic => :publication_title},
+        "DOI"         => {:semantic => :doi},
+        "PUBYEAR"     => {:semantic => :year}
       }
     end
     
@@ -214,6 +232,9 @@ module BentoSearch
       }
     end
 
+    def multi_field_search?
+      true
+    end
             
     protected
     
@@ -274,10 +295,12 @@ module BentoSearch
     
      
     def scopus_url(args)
-      query = escape_query args[:query]
-      
-      if args[:search_field]
-        query = "#{args[:search_field]}(#{query})"
+      query = if args[:query].kind_of? Hash
+        args[:query].collect {|field, query| fielded_query(query,field)}.join(" AND ")
+      elsif args[:search_field]
+        fielded_query(args[:query], args[:search_field])
+      else
+        escape_query args[:query]
       end
       
       query = "#{configuration.base_url.chomp("/")}/content/search/index:#{configuration.cluster}?query=#{CGI.escape(query)}"
@@ -295,6 +318,10 @@ module BentoSearch
       end      
       
       return query
+    end
+
+    def fielded_query(query, field)
+      "#{field}(#{escape_query query})"
     end
     
   end

@@ -218,6 +218,31 @@ Kaminari's paginate method:
     <%= paginate results.pagination %>
 ~~~~
 
+### Multi-field search
+
+Some search engines support-multi field searching, an engine advertises if it does:
+
+    engine_instance.multi_field_searching? # => `true` or `false`
+
+The bento_search multi-field search feature always combines multiple
+fields with boolean 'and' (intersection). You call a multi-field search
+with a :query hash argument whose value is a hash of search-fields and
+queries:
+
+    engine.search(:query => {
+      :title  => '"Reflections on the History of Debt Resistance"',
+      :author => 'Caffentzis'
+    })
+
+The search field keys can be either semantic_search_field names, or internal
+engine search fields, or a combination. If the key matches a semantic search field
+declared for the engine, that will be preferred.
+
+This can be used to expose a multi-field search to users, and the `bento_field_hash_for`
+helper method might be helpful in creating your UI. But this is also useful for looking
+up known-item citations -- either by author/title, or issn/volume/issue/page, or doi, or
+anything else -- as back-end support for various possible functions. 
+
 ### Concurrent searching
 
 If you're going to search 2 or more search engines at once, you'll want to execute
@@ -349,6 +374,46 @@ end
 
 There are additional details that might matter to you, for more info see the
 [wiki page](https://github.com/jrochkind/bento_search/wiki/Machine-Readable-Serialization-With-Atom)
+
+### Round-Trip Serialization to JSON
+
+You can serialize BentoSearch::Results to a simple straightforward JSON structure, and de-serialize
+them back into BentoSearch::Results. 
+
+~~~ruby
+json_str          = results.dump_to_json
+copy_of_results   = BentoSearch::Results.load_json(json_str)
+~~~
+
+Search context (query, start, per_page) are not serialized, and will be lost
+on de-serialization. 
+
+Unlike the Atom serialization, **the JSON serialization is of internal data
+state, without decoration.** Configuration context is not serialized.  
+
+However, the engine_id is included in serialization if present, 
+and configuration from the specified engine
+will be re-assigned on de-serialization.  This means if the configuration
+changed between serialization and de-serialization, you get the new stuff
+assigned on de-serialization. 
+
+The use case guiding JSON serialization is storage somewhere, and
+round-trip de-serialization in the current app context. 
+
+If you want to take de-serialized results that did not have an engine_id,
+or set configuration on them to a different engine (registered or not) you can:
+
+~~~ruby
+  restored = BentoSearch::Results.load_json(json_str)
+  some_engine.fill_in_search_metadata_for(restored)
+
+  # restored Results will have configuration (engine_id, decorators, etc)
+  # set to those configured on some_engine
+~~~
+
+If you want a serialization to be consumed by something other than an
+app using the bento_search gem, as an API, we recommend the [Atom serialization](https://github.com/jrochkind/bento_search/wiki/Machine-Readable-Serialization-With-Atom)
+instead. 
 
 ## Planned Features
 

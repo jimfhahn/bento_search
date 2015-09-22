@@ -10,9 +10,13 @@ require 'nokogiri'
 module BentoSearch
   # Usually raised by #get on an engine, when result for specified identifier
   # can't be found. 
-  class NotFound < Exception ; end
+  class ::BentoSearch::NotFound < ::BentoSearch::Error ; end
   # Usually raised by #get when identifier results in more than one record. 
-  class TooManyFound < Exception ; end
+  class ::BentoSearch::TooManyFound < ::BentoSearch::Error ; end
+  # Raised for problem contacting or unexpected response from
+  # remote service. Not yet universally used. 
+  class ::BentoSearch::FetchError < ::BentoSearch::Error ; end
+
   
   # Module mix-in for bento_search search engines. 
   #
@@ -217,16 +221,7 @@ module BentoSearch
       fill_in_search_metadata_for(results, arguments)
             
       results.timing = (Time.now - start_t)
-            
-      results.each do |item| 
-        # We copy some configuraton info over to each Item, as a convenience
-        # to display logic that may have decide what to do given only an item,
-        # and may want to parameterize based on configuration.
-        item.engine_id              = results.engine_id 
-        item.decorator              = configuration.lookup!("for_display.decorator")
-        item.display_configuration  = configuration.for_display
-      end
-        
+                    
       return results
     rescue *auto_rescue_exceptions => e
       # Uncaught exception, log and turn into failed Results object. We
@@ -252,16 +247,26 @@ module BentoSearch
     
     # SOME of the elements of Results to be returned that SearchEngine implementation
     # fills in automatically post-search. Extracted into a method for DRY in
-    # error handling to try to fill these in even in errors. And *possible*
-    # experimental use in other classes for same thing is why method is
-    # public, see MultiSearcher.     
-    def fill_in_search_metadata_for(results, normalized_arguments)
+    # error handling to try to fill these in even in errors. Also can be used
+    # as public method for de-serialized or mock results. 
+    def fill_in_search_metadata_for(results, normalized_arguments = {})
       results.search_args           = normalized_arguments
       results.start = normalized_arguments[:start] || 0
       results.per_page = normalized_arguments[:per_page]
       
       results.engine_id             = configuration.id
-      results.display_configuration = configuration.for_display                        
+      results.display_configuration = configuration.for_display
+
+      # We copy some configuraton info over to each Item, as a convenience
+      # to display logic that may have decide what to do given only an item,
+      # and may want to parameterize based on configuration.
+      results.each do |item| 
+        item.engine_id              = configuration.id 
+        item.decorator              = configuration.lookup!("for_display.decorator")
+        item.display_configuration  = configuration.for_display
+      end
+
+      results
     end
         
 
@@ -324,10 +329,39 @@ module BentoSearch
       if arguments[:sort]
         arguments[:sort] = arguments[:sort].to_s
       end
+
+      
+      # Multi-field search
+      if arguments[:query].kind_of? Hash
+        # Only if allowed
+        unless self.multi_field_search?
+          raise ArgumentError.new("You supplied a :query as a hash, but this engine (#{self.class}) does not suport multi-search. #{arguments[:query].inspect}")
+        end
+        # Multi-field search incompatible with :search_field or :semantic_search_field
+        if arguments[:search_field].present?
+          raise ArgumentError.new("You supplied a :query as a Hash, but also a :search_field, you can only use one. #{arguments.inspect}")
+        end
+        if arguments[:semantic_search_field].present?
+          raise ArgumentError.new("You supplied a :query as a Hash, but also a :semantic_search_field, you can only use one. #{arguments.inspect}")
+        end
+
+        # translate semantic fields, raising for unfound fields if configured
+        arguments[:query].transform_keys! do |key|
+          new_key = self.semantic_search_map[key.to_s] || key
+          
+          if ( config_arg(arguments, :unrecognized_search_field) == "raise" &&
+              ! self.search_keys.include?(new_key))
+            raise ArgumentError.new("#{self.class.name} does not know about search_field #{new_key}, in query Hash #{arguments[:query]}")
+          end
+
+          new_key
+        end
+
+      end
       
       # translate semantic_search_field to search_field, or raise if
       # can't. 
-      if (semantic = arguments.delete(:semantic_search_field)) && ! semantic.blank?        
+      if (semantic = arguments.delete(:semantic_search_field)) && ! semantic.blank?
         mapped = self.semantic_search_map[semantic.to_s]
         if config_arg(arguments, :unrecognized_search_field) == "raise" && ! mapped 
           raise ArgumentError.new("#{self.class.name} does not know about :semantic_search_field #{semantic}")
@@ -356,7 +390,7 @@ module BentoSearch
    
     
     protected
-    
+
     # get value of an arg that can be supplied in search args OR config,
     # with search_args over-ridding config. Also normalizes value to_s
     # (for symbols/strings). 

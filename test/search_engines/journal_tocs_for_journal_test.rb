@@ -13,7 +13,12 @@ class JournalTocsForJournalTest < ActiveSupport::TestCase
   end
 
   def setup
-  	@engine = JournalTocsForJournal.new(:registered_email => @@registered_email)
+    @test_engine_id       = "test_journal_tocs_engine_id"
+    @test_decorator_name  = "MockDecorator"
+  	@engine = JournalTocsForJournal.new(:registered_email => @@registered_email, 
+      :id => @test_engine_id,
+      :for_display => {:one => "one", :two => "two", :decorator => @test_decorator_name})
+    @test_display_config = @engine.configuration.for_display
   end
 
 
@@ -43,9 +48,11 @@ class JournalTocsForJournalTest < ActiveSupport::TestCase
   test_with_cassette("error on bad registered email", :journal_tocs) do
     engine = JournalTocsForJournal.new(:registered_email => "unregistered@nowhere.com")
 
-    assert_raise JournalTocsForJournal::FetchError do
+    error = assert_raise JournalTocsForJournal::FetchError do
       xml = engine.fetch_xml("1533290X")
     end
+
+    assert error.message =~ /account is invalid/
   end
 
   test_with_cassette("smoke test", :journal_tocs) do
@@ -54,8 +61,16 @@ class JournalTocsForJournalTest < ActiveSupport::TestCase
     assert_present items
     assert_kind_of Array, items
     assert_kind_of BentoSearch::Results, items
+
+    assert_equal @test_engine_id,           items.engine_id
+    assert_equal @test_display_config.to_h, items.display_configuration.to_h
+
     items.each do |item|
       assert_kind_of BentoSearch::ResultItem, item
+
+      assert_equal @test_engine_id, item.engine_id
+      assert_equal @test_display_config.to_h, item.display_configuration.to_h
+      assert_equal @test_decorator_name, item.decorator
     end
   end
 
@@ -88,6 +103,15 @@ class JournalTocsForJournalTest < ActiveSupport::TestCase
 
     assert items.empty?
   end
+
+  test_with_cassette("sorts by date", :journal_tocs) do
+    items = @engine.fetch_by_issn("0026-2617")
+
+    (1..(items.length - 1)).each do |i|
+      assert items[i].publication_date <= items[i-1].publication_date, "Expected sorted in reverse date order"
+    end
+  end
+
 
 end
 

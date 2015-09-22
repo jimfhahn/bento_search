@@ -174,5 +174,5 @@ class SearchEngineTest < ActiveSupport::TestCase
       assert_present  results.display_configuration.foo      
       assert_present  results.display_configuration.nested.one                  
     end
-
+    
 end
